@@ -20,6 +20,7 @@ huggingface-hub
 # PDF parsing
 pypdf
 
+torch
 # Environment variables
 python-dotenv
 
