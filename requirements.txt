@@ -1,7 +1,6 @@
 # Core framework
 streamlit
-pytorch
-torchvision
+torch
 # LangChain core & integrations
 langchain
 langchain-community
