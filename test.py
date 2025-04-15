@@ -1,5 +1,4 @@
 import os
-os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 import streamlit as st
 from dotenv import load_dotenv
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
@@ -13,7 +12,14 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from sentence_transformers import SentenceTransformer
+import os
+import sys
+os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
+# Add this after your regular imports
+import torch
+if "torch" in sys.modules:
+    sys.modules["torch"].__path__ = []  # Disable path introspection
 # Load environment variables
 load_dotenv()
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
