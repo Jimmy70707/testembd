@@ -13,14 +13,14 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from sentence_transformers import SentenceTransformer
+from langchain_community.embeddings import HuggingFaceEmbeddings
 import torch
 
-# ================== CRITICAL FIXES ==================
-# Configure environment and PyTorch before anything else
+# ================== CRITICAL CONFIGURATION ==================
 os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 torch.set_default_device('cpu')
 if "torch" in sys.modules:
-    sys.modules["torch"].__path__ = []  # Disable path introspection
+    sys.modules["torch"].__path__ = []
 
 # Load environment variables
 load_dotenv()
@@ -29,33 +29,19 @@ if not GROQ_API_KEY:
     st.error("Missing API keys! Please add them in .env or Streamlit Secrets.")
     st.stop()
 
-# ================== MODIFIED EMBEDDINGS WRAPPER ==================
-class EmbeddingsWrapper:
-    def __init__(self, model):
-        self.model = model
-        # Force model to CPU with initialized tensors
-        self.model.to('cpu')  # Ensure tensors are materialized
-        
-    def embed_documents(self, docs):
-        return self.model.encode(
-            docs, 
-            show_progress_bar=True,
-            device='cpu'  # Explicitly use CPU
-        ).tolist()
+# ================== UPDATED EMBEDDINGS SETUP ==================
+@st.cache_resource
+def get_embeddings():
+    # Use LangChain's HuggingFaceEmbeddings wrapper for better compatibility
+    model_kwargs = {'device': 'cpu'}
+    encode_kwargs = {'normalize_embeddings': True}
+    return HuggingFaceEmbeddings(
+        model_name="thenlper/gte-base",
+        model_kwargs=model_kwargs,
+        encode_kwargs=encode_kwargs
+    )
 
-    def __call__(self, docs):
-        return self.embed_documents(docs)
-
-# ================== MODIFIED MODEL INITIALIZATION ==================
-# Initialize SentenceTransformer with CPU-only settings
-sentence_transformer_model = SentenceTransformer(
-    'thenlper/gte-base',
-    device='cpu',
-    use_auth_token=False
-)
-# Force materialization of all tensors
-sentence_transformer_model.to('cpu')  
-embeddings = EmbeddingsWrapper(sentence_transformer_model)
+embeddings = get_embeddings()
 
 # ================== STREAMLIT APP INTERFACE ==================
 st.title("Conversational RAG With PDF Uploads and Chat History")
@@ -68,15 +54,14 @@ except Exception as e:
     st.error(f"Failed to initialize LLM: {e}")
     st.stop()
 
-# Chat interface: session id and session history
+# Chat interface setup
 session_id = st.text_input("Session ID", value="default_session")
 if 'store' not in st.session_state:
     st.session_state.store = {}
 
-# Define PDF file source(s)
+# PDF processing
 predefined_pdfs = ["Health Montoring Box (CHATBOT).pdf"]
 
-# Cache PDF loading/processing
 @st.cache_data
 def load_and_process_pdfs(pdf_paths):
     documents = []
@@ -93,7 +78,6 @@ if predefined_pdfs:
     documents = load_and_process_pdfs(predefined_pdfs)
     st.success(f"Successfully processed {len(documents)} pages from {len(predefined_pdfs)} PDF(s).")
 
-    # Cache embeddings generation and vectorstore creation
     @st.cache_resource
     def generate_embeddings(_documents):
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=500)
@@ -108,50 +92,31 @@ if predefined_pdfs:
         st.error(f"Error generating embeddings: {e}")
         st.stop()
 
-    # Create prompts for contextualizing question and for QA
-    contextualize_q_system_prompt = (
-        "Given a chat history and the latest user question "
-        "which might reference context in the chat history, "
-        "formulate a standalone question which can be understood "
-        "without the chat history. Do NOT answer the question, "
-        "just reformulate it if needed and otherwise return it as is."
-    )
-    contextualize_q_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", contextualize_q_system_prompt),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}"),
-        ]
-    )
+    # Chain setup
+    contextualize_q_system_prompt = """Given a chat history and the latest user question,
+    formulate a standalone question which can be understood without the chat history.
+    Do NOT answer the question, just reformulate it if needed."""
+    
+    contextualize_q_prompt = ChatPromptTemplate.from_messages([
+        ("system", contextualize_q_system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ])
 
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
-    system_prompt = (
-        "You are a medical assistant for question-answering tasks. "
-        "Use the following pieces of retrieved context to answer "
-        "the question concisely. If the question is about medical readings "
-        "and the values are abnormal or dangerous, clearly advise the user "
-        "to consult a doctor immediately. "
-        "If you don't know the answer, say that you don't know. "
-        "Keep the answer to 1-2 sentences maximum."
-        "\n\n"
-        "{context}"
-    )
-    qa_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}"),
-        ]
-    )
+    system_prompt = """You are a medical assistant. Use the context to answer concisely.
+    For abnormal medical readings, advise consulting a doctor immediately.
+    If unsure, say you don't know. Keep answers to 1-2 sentences.\n\n{context}"""
+    
+    qa_prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ])
 
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
-
-    def extract_final_answer(response: str) -> str:
-        if "</think>" in response:
-            return response.split("</think>")[-1].strip()
-        return response.strip()
 
     def get_session_history(session: str) -> BaseChatMessageHistory:
         if session not in st.session_state.store:
@@ -159,13 +124,14 @@ if predefined_pdfs:
         return st.session_state.store[session]
 
     conversational_rag_chain = RunnableWithMessageHistory(
-        rag_chain, get_session_history,
+        rag_chain,
+        get_session_history,
         input_messages_key="input",
         history_messages_key="chat_history",
         output_messages_key="answer"
     )
 
-    # Handle user input with text box and submit button
+    # User interaction
     user_input = st.text_input("Your question:", key="user_input",
                              on_change=lambda: st.session_state.update({"submitted": True}))
     submit_pressed = st.button("Submit", key="submit_button")
@@ -180,12 +146,8 @@ if predefined_pdfs:
                         {"input": user_input},
                         config={"configurable": {"session_id": session_id}},
                     )
-                    full_answer = response['answer']
-                    if "</think>" in full_answer:
-                        final_answer = full_answer.split("</think>")[-1].strip()
-                    else:
-                        final_answer = full_answer.strip()
-                    st.markdown(f"**Answer:** {final_answer}")
+                    answer = response['answer'].split("</think>")[-1].strip() if "</think>" in response['answer'] else response['answer'].strip()
+                    st.markdown(f"**Answer:** {answer}")
                     with st.expander("View Chat History"):
                         st.write(session_history.messages)
                 except Exception as e:
@@ -193,5 +155,4 @@ if predefined_pdfs:
 
     if st.button("Clear Chat History"):
         st.session_state.store[session_id] = ChatMessageHistory()
-        st.session_state.store[session_id].messages = []
         st.success("Chat history cleared!")
