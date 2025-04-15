@@ -1,5 +1,6 @@
-import streamlit as st
 import os
+os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
+import streamlit as st
 from dotenv import load_dotenv
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
