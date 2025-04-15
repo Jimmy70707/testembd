@@ -1,5 +1,7 @@
 # Core framework
-
+streamlit
+torch
+torchvision
 # LangChain core & integrations
 langchain
 langchain-community
@@ -20,7 +22,6 @@ huggingface-hub
 # PDF parsing
 pypdf
 
-torch
 # Environment variables
 python-dotenv
 
