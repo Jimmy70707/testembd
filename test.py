@@ -1,4 +1,5 @@
 import os
+import sys
 import streamlit as st
 from dotenv import load_dotenv
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
@@ -12,14 +13,15 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from sentence_transformers import SentenceTransformer
-import os
-import sys
-os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
-
-# Add this after your regular imports
 import torch
+
+# ================== CRITICAL FIXES ==================
+# Configure environment and PyTorch before anything else
+os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
+torch.set_default_device('cpu')
 if "torch" in sys.modules:
     sys.modules["torch"].__path__ = []  # Disable path introspection
+
 # Load environment variables
 load_dotenv()
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
@@ -27,25 +29,35 @@ if not GROQ_API_KEY:
     st.error("Missing API keys! Please add them in .env or Streamlit Secrets.")
     st.stop()
 
-# Define a wrapper that makes the SentenceTransformer model callable
+# ================== MODIFIED EMBEDDINGS WRAPPER ==================
 class EmbeddingsWrapper:
     def __init__(self, model):
         self.model = model
-
+        # Force model to CPU with initialized tensors
+        self.model.to('cpu')  # Ensure tensors are materialized
+        
     def embed_documents(self, docs):
-        # Generate embeddings for the given documents using SentenceTransformer's encode
-        return self.model.encode(docs, show_progress_bar=True).tolist()
+        return self.model.encode(
+            docs, 
+            show_progress_bar=True,
+            device='cpu'  # Explicitly use CPU
+        ).tolist()
 
     def __call__(self, docs):
-        # This makes the instance callable like a function
         return self.embed_documents(docs)
 
-# Initialize the underlying SentenceTransformer model and wrap it
-#device = 'cpu'  # force CPU usage to avoid NotImplementedError in Streamlit Cloud
-sentence_transformer_model = SentenceTransformer('thenlper/gte-base')
+# ================== MODIFIED MODEL INITIALIZATION ==================
+# Initialize SentenceTransformer with CPU-only settings
+sentence_transformer_model = SentenceTransformer(
+    'thenlper/gte-base',
+    device='cpu',
+    use_auth_token=False
+)
+# Force materialization of all tensors
+sentence_transformer_model.to('cpu')  
 embeddings = EmbeddingsWrapper(sentence_transformer_model)
 
-# Set up the Streamlit app interface
+# ================== STREAMLIT APP INTERFACE ==================
 st.title("Conversational RAG With PDF Uploads and Chat History")
 st.write("Upload PDFs and chat with their content")
 
@@ -155,7 +167,7 @@ if predefined_pdfs:
 
     # Handle user input with text box and submit button
     user_input = st.text_input("Your question:", key="user_input",
-                               on_change=lambda: st.session_state.update({"submitted": True}))
+                             on_change=lambda: st.session_state.update({"submitted": True}))
     submit_pressed = st.button("Submit", key="submit_button")
 
     if submit_pressed or st.session_state.get("submitted"):
