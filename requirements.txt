@@ -1,6 +1,6 @@
 # Core framework
-streamlit>=1.33.0
-torch>=2.2.0
+streamlit
+pytorch
 torchvision
 # LangChain core & integrations
 langchain
